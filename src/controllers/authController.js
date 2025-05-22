@@ -157,10 +157,9 @@ exports.forgotPassword = async (req, res, next) => {
         const resetToken = user.createPasswordResetToken();
         await user.save({ validateBeforeSave: false }); 
         
-        // Log the saved values from the DB immediately after save for verification
         const savedUser = await User.findById(user._id).select('+passwordResetToken +passwordResetExpires');
         console.log(`FORGOT_PASSWORD_DB_VERIFY: User: ${savedUser.email}, Stored Hashed Token: ${savedUser.passwordResetToken}, Stored Expires: ${savedUser.passwordResetExpires}`);
-        console.log(`FORGOT_PASSWORD_SUCCESS: Password reset token for ${user.email}: ${resetToken}`); // This is UNHASHED
+        console.log(`FORGOT_PASSWORD_SUCCESS: Password reset token for ${user.email}: ${resetToken}`);
 
         res.status(200).json({
             success: true,
@@ -183,10 +182,14 @@ exports.forgotPassword = async (req, res, next) => {
 // --- Reset Password ---
 exports.resetPassword = async (req, res, next) => {
     try {
-        const unhashedTokenFromParams = req.params.resettoken;
+        // **** ADDED LOGGING FOR req.params ****
+        console.log(`RESET_PASSWORD_INFO: Received req.params:`, JSON.stringify(req.params));
+        const unhashedTokenFromParams = req.params.resettoken; // This is how it should be accessed
+        // ***************************************
+
         const { password, confirmPassword } = req.body;
 
-        console.log(`RESET_PASSWORD_INFO: Received unhashed token from params: ${unhashedTokenFromParams}`);
+        console.log(`RESET_PASSWORD_INFO: Value of unhashedTokenFromParams: ${unhashedTokenFromParams}`);
 
         if (!password || !confirmPassword) {
             return res.status(400).json({ success: false, message: 'Please provide new password and confirm password.' });
@@ -196,6 +199,15 @@ exports.resetPassword = async (req, res, next) => {
         }
         if (password.length < 8) {
             return res.status(400).json({ success: false, message: 'Password must be at least 8 characters long.' });
+        }
+
+        // Only proceed if unhashedTokenFromParams is a non-empty string
+        if (!unhashedTokenFromParams || typeof unhashedTokenFromParams !== 'string' || unhashedTokenFromParams.trim() === '') {
+            console.log(`RESET_PASSWORD_FAIL: Token from params is invalid or missing.`);
+            return res.status(400).json({
+                success: false,
+                message: 'Password reset token is invalid or missing from the link.',
+            });
         }
 
         const hashedTokenToSearch = crypto
@@ -209,11 +221,10 @@ exports.resetPassword = async (req, res, next) => {
         const user = await User.findOne({
             passwordResetToken: hashedTokenToSearch,
             passwordResetExpires: { $gt: Date.now() },
-        }).select('+passwordResetToken +passwordResetExpires'); // Select fields for logging
+        }).select('+passwordResetToken +passwordResetExpires');
 
         if (!user) {
             console.log(`RESET_PASSWORD_FAIL: User not found with token or token expired.`);
-            // For more detailed debugging, check if user exists by token but is expired
             const userWithExpiredToken = await User.findOne({ passwordResetToken: hashedTokenToSearch });
             if (userWithExpiredToken) {
                 console.log(`RESET_PASSWORD_FAIL_DETAIL: User found with token, but token expired. ExpiresAt: ${userWithExpiredToken.passwordResetExpires}, Now: ${new Date(Date.now())}`);
@@ -236,7 +247,7 @@ exports.resetPassword = async (req, res, next) => {
         const token = generateToken(user._id, user.role);
         const userResponse = { ...user._doc };
         delete userResponse.password;
-        delete userResponse.passwordResetToken; // Ensure these are not in the response
+        delete userResponse.passwordResetToken;
         delete userResponse.passwordResetExpires;
 
         res.status(200).json({
