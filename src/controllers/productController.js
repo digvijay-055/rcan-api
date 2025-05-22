@@ -1,7 +1,6 @@
 // File: rcan-api/src/controllers/productController.js
 const Product = require('../models/ProductModel');
-const mongoose = require('mongoose');
-// Import the Cloudinary uploader function
+const mongoose = require('mongoose'); // Ensure mongoose is imported at the top
 const { uploadToCloudinary } = require('../config/cloudinaryConfig');
 
 // --- Create a new Product ---
@@ -13,13 +12,12 @@ exports.createProduct = async (req, res, next) => {
             description,
             price,
             category,
-            ingredients, // Expect as comma-separated string or array
-            dietaryInfo, // Expect as comma-separated string or array
+            ingredients, 
+            dietaryInfo, 
             stockQuantity,
             isActive
         } = req.body;
 
-        // 1. Basic validation
         if (!name || !description || price === undefined || !category || stockQuantity === undefined) {
             return res.status(400).json({
                 success: false,
@@ -27,38 +25,29 @@ exports.createProduct = async (req, res, next) => {
             });
         }
 
-        let imageUrls = []; // To store URLs of uploaded images
+        let imageUrls = []; 
 
-        // 2. Handle Image Uploads (if files are present)
-        // Assuming 'productImages' is the field name used in multerMiddleware.uploadMultipleImages
         if (req.files && req.files.length > 0) {
-            // Upload multiple images in parallel
             const uploadPromises = req.files.map(file =>
                 uploadToCloudinary(file.buffer, {
                     folder: process.env.CLOUDINARY_UPLOAD_FOLDER || 'rcan_bakery_products',
-                    // You can add transformations or other options here
-                    // public_id: `${name.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}` // Optional: custom public_id
                 })
             );
-
             const uploadResults = await Promise.all(uploadPromises);
             imageUrls = uploadResults.map(result => result.secure_url);
-        } else if (req.file) { // Handle single image upload if 'productImage' was used
+        } else if (req.file) { 
              const result = await uploadToCloudinary(req.file.buffer, {
                 folder: process.env.CLOUDINARY_UPLOAD_FOLDER || 'rcan_bakery_products',
             });
             imageUrls.push(result.secure_url);
         }
 
-
-        // Helper to parse comma-separated strings into arrays if needed
         const parseStringToArray = (input) => {
             if (!input) return [];
-            if (Array.isArray(input)) return input; // Already an array
-            return input.split(',').map(item => item.trim()).filter(item => item); // Split, trim, and remove empty strings
+            if (Array.isArray(input)) return input; 
+            return input.split(',').map(item => item.trim()).filter(item => item); 
         };
 
-        // 3. Create product with image URLs
         const product = await Product.create({
             name,
             description,
@@ -69,7 +58,7 @@ exports.createProduct = async (req, res, next) => {
             dietaryInfo: parseStringToArray(dietaryInfo),
             stockQuantity,
             isActive: isActive !== undefined ? (String(isActive).toLowerCase() === 'true') : true,
-            // createdBy: req.user.id // If you associate product with admin
+            // createdBy: req.user.id 
         });
 
         res.status(201).json({
@@ -87,30 +76,34 @@ exports.createProduct = async (req, res, next) => {
                 message: messages.join('. ') || 'Invalid product data.',
             });
         }
-        // Handle Cloudinary upload errors specifically if needed, though uploadToCloudinary should reject
         res.status(500).json({
             success: false,
             message: 'Server error while creating product. Please try again later.',
-            errorDetails: error.message // For debugging
+            errorDetails: error.message 
         });
     }
 };
 
 // --- Get all Products ---
-// @access  Public
+// @access  Public (with admin override for isActive=all)
 exports.getAllProducts = async (req, res, next) => {
     try {
         let query = {};
-        if (req.query.category) {
-            query.category = req.query.category;
+        
+        // Logging to see what the backend receives
+        console.log("getAllProducts - Received query params:", req.query);
+        console.log("getAllProducts - User making request:", req.user ? { id: req.user.id, role: req.user.role } : "No user/Not authenticated");
+
+        // Determine if the isActive filter should be applied
+        const isAdminRequestingAll = req.user && req.user.role === 'admin' && req.query.isActive === 'all';
+        
+        if (!isAdminRequestingAll) {
+            query.isActive = true; // Default to only active products
         }
-        if (req.query.isActive !== 'all') {
-             query.isActive = true;
-        } else if (req.user && req.user.role === 'admin' && req.query.isActive === 'all') {
-            // No modification to query
-        } else {
-            query.isActive = true;
-        }
+        // If isAdminRequestingAll is true, query.isActive remains undefined, so no filter on isActive is applied.
+
+        console.log("getAllProducts - Constructed MongoDB query object for products:", query);
+
 
         const page = parseInt(req.query.page, 10) || 1;
         const limit = parseInt(req.query.limit, 10) || 10;
@@ -129,8 +122,10 @@ exports.getAllProducts = async (req, res, next) => {
             .skip(skip)
             .limit(limit);
 
-        const totalProducts = await Product.countDocuments(query);
+        const totalProducts = await Product.countDocuments(query); // Count based on the same query
         const totalPages = Math.ceil(totalProducts / limit);
+
+        console.log(`getAllProducts - Found ${products.length} products for this page. Total matching: ${totalProducts}.`);
 
         res.status(200).json({
             success: true,
@@ -154,13 +149,17 @@ exports.getAllProducts = async (req, res, next) => {
 exports.getProductById = async (req, res, next) => {
     try {
         const productId = req.params.id;
-        if (!mongoose.Types.ObjectId.isValid(productId)) {
+        if (!mongoose.Types.ObjectId.isValid(productId)) { // mongoose was defined locally before, ensure it's global or imported
             return res.status(400).json({ success: false, message: 'Invalid product ID format.' });
         }
         const product = await Product.findById(productId);
         if (!product) {
             return res.status(404).json({ success: false, message: 'Product not found.' });
         }
+        // Optional: If you want to hide inactive products even when accessed by ID by non-admins
+        // if (!product.isActive && (!req.user || req.user.role !== 'admin')) {
+        //    return res.status(404).json({ success: false, message: 'Product not available.' });
+        // }
         res.status(200).json({ success: true, data: product });
     } catch (error) {
         console.error('Get Product By ID Error:', error);
@@ -182,11 +181,21 @@ exports.updateProduct = async (req, res, next) => {
             return res.status(404).json({ success: false, message: 'Product not found, cannot update.' });
         }
 
-        // Prepare updates from req.body
         const updates = { ...req.body };
-        delete updates.images; // Handle images separately
+        // Images are handled differently because they are files
+        // We expect 'images' in req.body to be an array of existing image URLs to keep, if any.
+        // New images come from req.files.
 
-        let newImageUrls = [];
+        let newImageUrls = existingProduct.images || []; // Start with existing images
+
+        // Handle deletion of specific existing images if frontend sends a list of imagesToKeep
+        if (req.body.imagesToKeep && Array.isArray(req.body.imagesToKeep)) {
+            newImageUrls = req.body.imagesToKeep;
+        } else if (req.body.images === '' || (Array.isArray(req.body.images) && req.body.images.length === 0)) {
+            // If an empty string or empty array for 'images' is sent, it means clear all existing images
+            newImageUrls = [];
+        }
+        // Note: Deleting old images from Cloudinary would happen here if newImageUrls differs from existingProduct.images
 
         // Handle new image uploads
         if (req.files && req.files.length > 0) {
@@ -196,39 +205,14 @@ exports.updateProduct = async (req, res, next) => {
                 })
             );
             const uploadResults = await Promise.all(uploadPromises);
-            newImageUrls = uploadResults.map(result => result.secure_url);
-        } else if (req.file) { // Handle single new image upload
-            const result = await uploadToCloudinary(req.file.buffer, {
-                folder: process.env.CLOUDINARY_UPLOAD_FOLDER || 'rcan_bakery_products',
-            });
-            newImageUrls.push(result.secure_url);
+            // Append new image URLs to the (potentially modified) list of existing URLs
+            newImageUrls = [...newImageUrls, ...uploadResults.map(result => result.secure_url)];
         }
-
-        // Decide how to handle existing images vs new images
-        // Option 1: Replace all existing images with new ones (if any new ones are uploaded)
-        if (newImageUrls.length > 0) {
-            // TODO Optional: Delete old images from Cloudinary to save space
-            // This requires storing public_ids of Cloudinary images or parsing them from URLs.
-            // For now, we'll just overwrite the image array.
-            updates.images = newImageUrls;
-        } else if (req.body.existingImages) {
-            // Option 2: Allow frontend to send back a list of existing image URLs to keep,
-            // and potentially new ones are added. This is more complex to manage.
-            // For simplicity, if no new files are uploaded, we keep existing images unless
-            // an empty `images` array is explicitly sent in req.body to clear them.
-            // If `req.body.images` is sent (e.g. as an array of URLs to keep, or empty to clear), use that.
-            // This part needs careful frontend-backend coordination.
-            // For now, if no new images, existing images are kept unless `updates.images = []` is explicitly in body.
-            if(req.body.images && Array.isArray(req.body.images)) {
-                updates.images = req.body.images; // Allows clearing or reordering existing images
-            }
-        }
-        // If `updates.images` is not set by new uploads or explicitly in body, existing images are preserved by default.
+        updates.images = newImageUrls;
 
 
-        // Helper to parse comma-separated strings into arrays if needed
         const parseStringToArray = (input) => {
-            if (input === undefined || input === null) return undefined; // Don't process if not provided
+            if (input === undefined || input === null) return undefined; 
             if (Array.isArray(input)) return input;
             return input.split(',').map(item => item.trim()).filter(item => item);
         };
@@ -240,7 +224,7 @@ exports.updateProduct = async (req, res, next) => {
 
         const updatedProduct = await Product.findByIdAndUpdate(
             productId,
-            updates,
+            updates, // updates object now contains the final images array
             { new: true, runValidators: true }
         );
 
@@ -280,13 +264,18 @@ exports.deleteProduct = async (req, res, next) => {
         }
 
         // TODO Optional: Delete images from Cloudinary before deleting the product from DB
+        // This requires parsing public_id from Cloudinary URLs or storing public_ids.
+        // Example:
         // if (product.images && product.images.length > 0) {
-        //     const deletePromises = product.images.map(imageUrl => {
-        //         const publicId = cloudinary.utils.public_id(imageUrl); // Helper to extract public_id
-        //         return cloudinary.uploader.destroy(publicId);
+        //     const publicIds = product.images.map(url => {
+        //         const parts = url.split('/');
+        //         const publicIdWithExtension = parts[parts.length -1];
+        //         return `${process.env.CLOUDINARY_UPLOAD_FOLDER}/${publicIdWithExtension.split('.')[0]}`;
         //     });
-        //     await Promise.all(deletePromises);
+        //     console.log("Attempting to delete from Cloudinary, publicIds:", publicIds);
+        //     // await cloudinary.api.delete_resources(publicIds); // This is one way
         // }
+
 
         await Product.findByIdAndDelete(productId);
 
