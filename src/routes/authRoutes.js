@@ -6,10 +6,11 @@ const router = express.Router();
 const {
     registerUser,
     loginUser,
-    getMe
+    getMe,
+    updateUserDetails // Import the new controller function
 } = require('../controllers/authController');
 
-// Import authentication middleware (we will create this in the next step)
+// Import authentication middleware
 const { protect } = require('../middleware/authMiddleware');
 
 // --- Define Authentication Routes ---
@@ -27,11 +28,17 @@ router.post('/login', loginUser);
 // @desc    Get current logged-in user's details
 // @route   GET /api/v1/auth/me
 // @access  Private (requires token)
-router.get('/me', protect, getMe); // 'protect' middleware will be executed before 'getMe'
+router.get('/me', protect, getMe);
+
+// @desc    Update current logged-in user's details (e.g., name)
+// @route   PUT /api/v1/auth/updatedetails
+// @access  Private (requires token)
+router.put('/updatedetails', protect, updateUserDetails);
+
 
 // You can add more auth-related routes here later, e.g.:
 // router.post('/forgotpassword', forgotPasswordController);
 // router.put('/resetpassword/:resettoken', resetPasswordController);
-// router.put('/updatepassword', protect, updateUserPasswordController); // For logged-in users to change their password
+// router.put('/updatepassword', protect, updateUserPasswordController);
 
 module.exports = router;
