@@ -7,7 +7,8 @@ const {
     registerUser,
     loginUser,
     getMe,
-    updateUserDetails // Import the new controller function
+    updateUserDetails,
+    updateUserPassword // Import the new controller function
 } = require('../controllers/authController');
 
 // Import authentication middleware
@@ -35,10 +36,14 @@ router.get('/me', protect, getMe);
 // @access  Private (requires token)
 router.put('/updatedetails', protect, updateUserDetails);
 
+// @desc    Update current logged-in user's password
+// @route   PUT /api/v1/auth/updatepassword
+// @access  Private (requires token)
+router.put('/updatepassword', protect, updateUserPassword);
+
 
 // You can add more auth-related routes here later, e.g.:
 // router.post('/forgotpassword', forgotPasswordController);
 // router.put('/resetpassword/:resettoken', resetPasswordController);
-// router.put('/updatepassword', protect, updateUserPasswordController);
 
 module.exports = router;
