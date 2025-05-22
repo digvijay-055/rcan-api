@@ -1,14 +1,14 @@
 // File: rcan-api/src/controllers/authController.js
-const User = require('../models/UserModel'); // Import the User model
-const jwt = require('jsonwebtoken'); // To generate JWT tokens
-const bcrypt = require('bcryptjs'); // To compare hashed passwords (already used in UserModel for hashing)
+const User = require('../models/UserModel');
+const jwt = require('jsonwebtoken');
+// bcrypt is used in UserModel's pre-save hook and comparePassword method
 
 // --- Utility function to generate JWT ---
 const generateToken = (userId, userRole) => {
     return jwt.sign(
-        { id: userId, role: userRole }, // Payload: contains user ID and role
-        process.env.JWT_SECRET,         // Secret key from .env
-        { expiresIn: process.env.JWT_EXPIRES_IN } // Expiry time from .env
+        { id: userId, role: userRole },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
     );
 };
 
@@ -17,7 +17,6 @@ exports.registerUser = async (req, res, next) => {
     try {
         const { name, email, password, role } = req.body;
 
-        // 1. Validate input (basic validation)
         if (!name || !email || !password) {
             return res.status(400).json({
                 success: false,
@@ -25,9 +24,6 @@ exports.registerUser = async (req, res, next) => {
             });
         }
 
-        // You can add more sophisticated validation here (e.g., password strength)
-
-        // 2. Check if user already exists
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
             return res.status(400).json({
@@ -36,23 +32,18 @@ exports.registerUser = async (req, res, next) => {
             });
         }
 
-        // 3. Create new user (password will be hashed by the pre-save hook in UserModel)
         const newUser = await User.create({
             name,
             email: email.toLowerCase(),
             password,
-            role: role || 'customer', // Default to 'customer' if role is not provided
+            role: role || 'customer',
         });
 
-        // 4. Generate JWT token
         const token = generateToken(newUser._id, newUser.role);
-
-        // 5. Send response (excluding password)
-        // To exclude password even if 'select: false' wasn't on the model for some reason:
-        const userResponse = { ...newUser._doc }; // _doc contains the plain object
+        const userResponse = { ...newUser._doc };
         delete userResponse.password;
 
-        res.status(201).json({ // 201 Created
+        res.status(201).json({
             success: true,
             message: 'User registered successfully!',
             token,
@@ -61,7 +52,6 @@ exports.registerUser = async (req, res, next) => {
 
     } catch (error) {
         console.error('Registration Error:', error);
-        // Check for Mongoose validation errors
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map(val => val.message);
             return res.status(400).json({
@@ -72,9 +62,7 @@ exports.registerUser = async (req, res, next) => {
         res.status(500).json({
             success: false,
             message: 'Server error during registration. Please try again later.',
-            // error: error.message // Optionally send error message in dev
         });
-        // next(error); // Or pass to a global error handler
     }
 };
 
@@ -83,7 +71,6 @@ exports.loginUser = async (req, res, next) => {
     try {
         const { email, password } = req.body;
 
-        // 1. Validate input
         if (!email || !password) {
             return res.status(400).json({
                 success: false,
@@ -91,30 +78,24 @@ exports.loginUser = async (req, res, next) => {
             });
         }
 
-        // 2. Find user by email (and explicitly select password as it's select: false in model)
         const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
 
-        // 3. If user not found or password doesn't match
         if (!user) {
-            return res.status(401).json({ // 401 Unauthorized
+            return res.status(401).json({
                 success: false,
-                message: 'Invalid email or password.', // Generic message for security
+                message: 'Invalid email or password.',
             });
         }
 
-        // Use the comparePassword method from the UserModel
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
             return res.status(401).json({
                 success: false,
-                message: 'Invalid email or password.', // Generic message
+                message: 'Invalid email or password.',
             });
         }
 
-        // 4. Generate JWT token
         const token = generateToken(user._id, user.role);
-
-        // 5. Send response (excluding password)
         const userResponse = { ...user._doc };
         delete userResponse.password;
 
@@ -131,23 +112,61 @@ exports.loginUser = async (req, res, next) => {
             success: false,
             message: 'Server error during login. Please try again later.',
         });
-        // next(error); // Or pass to a global error handler
     }
 };
 
-// --- Get Current Logged-In User Controller (Example of a protected route handler) ---
+// --- Get Current Logged-In User Controller ---
 exports.getMe = async (req, res, next) => {
     try {
-        // Assuming authMiddleware has added 'user' to req object
         // req.user is populated by the authMiddleware after verifying the token
         if (!req.user || !req.user.id) {
              return res.status(401).json({ success: false, message: 'Not authorized, user data not found in request.' });
         }
+        // User object from req.user is already selected without password by protect middleware
+        res.status(200).json({
+            success: true,
+            user: req.user, // Send the user object attached by the protect middleware
+        });
+    } catch (error) {
+        console.error('GetMe Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error while fetching user details.',
+        });
+    }
+};
 
-        const user = await User.findById(req.user.id).select('-password'); // Exclude password
+// --- Update User Details (e.g., name) ---
+// @access  Private
+exports.updateUserDetails = async (req, res, next) => {
+    try {
+        const userId = req.user.id; // From protect middleware
+        const { name /*, other fields like email if you allow changing them */ } = req.body;
 
-        if (!user) {
-            // This case might happen if the user was deleted after the token was issued
+        // Fields to update
+        const fieldsToUpdate = {};
+        if (name) fieldsToUpdate.name = name;
+        // Add other fields here if needed, e.g.:
+        // if (req.body.email) fieldsToUpdate.email = req.body.email; // Be cautious with email updates due to uniqueness
+
+        if (Object.keys(fieldsToUpdate).length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No details provided for update.',
+            });
+        }
+
+        // Find user and update
+        // { new: true } returns the updated document
+        // { runValidators: true } ensures schema validations are run on update
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            fieldsToUpdate,
+            { new: true, runValidators: true }
+        ).select('-password'); // Exclude password from the returned user object
+
+        if (!updatedUser) {
+            // This case should be rare if protect middleware worked correctly
             return res.status(404).json({
                 success: false,
                 message: 'User not found.',
@@ -156,14 +175,29 @@ exports.getMe = async (req, res, next) => {
 
         res.status(200).json({
             success: true,
-            user,
+            message: 'User details updated successfully!',
+            user: updatedUser,
         });
+
     } catch (error) {
-        console.error('GetMe Error:', error);
+        console.error('Update User Details Error:', error);
+        if (error.name === 'ValidationError') {
+            const messages = Object.values(error.errors).map(val => val.message);
+            return res.status(400).json({
+                success: false,
+                message: messages.join('. ') || 'Invalid input data for update.',
+            });
+        }
+        // Handle other potential errors, e.g., if email update causes unique constraint violation
+        if (error.code === 11000 && error.keyValue && error.keyValue.email) { // MongoDB duplicate key error for email
+            return res.status(400).json({
+                success: false,
+                message: 'Email address is already in use by another account.',
+            });
+        }
         res.status(500).json({
             success: false,
-            message: 'Server error while fetching user details.',
+            message: 'Server error while updating user details. Please try again later.',
         });
-        // next(error);
     }
 };
