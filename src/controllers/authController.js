@@ -1,7 +1,7 @@
 // File: rcan-api/src/controllers/authController.js
 const User = require('../models/UserModel');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto'); // For generating and hashing reset token
+const crypto = require('crypto');
 
 // --- Utility function to generate JWT ---
 const generateToken = (userId, userRole) => {
@@ -127,7 +127,7 @@ exports.updateUserPassword = async (req, res, next) => {
              return res.status(400).json({ success: false, message: 'New password must be at least 8 characters long.' });
         }
         user.password = newPassword;
-        await user.save(); // This will trigger the pre-save hook for hashing and clearing reset tokens
+        await user.save();
         res.status(200).json({ success: true, message: 'Password updated successfully.' });
     } catch (error) {
         console.error('Update User Password Error:', error);
@@ -140,59 +140,34 @@ exports.updateUserPassword = async (req, res, next) => {
 };
 
 // --- Forgot Password ---
-// @desc    Generate a password reset token (and "send" it - we'll log it for now)
-// @route   POST /api/v1/auth/forgotpassword
-// @access  Public
 exports.forgotPassword = async (req, res, next) => {
     try {
         const { email } = req.body;
         if (!email) {
             return res.status(400).json({ success: false, message: 'Please provide an email address.' });
         }
-
         const user = await User.findOne({ email: email.toLowerCase() });
-
         if (!user) {
-            // Important: Don't reveal if an email exists or not for security reasons
-            // Send a generic success message even if user not found
             console.log(`FORGOT_PASSWORD_INFO: Attempt to reset password for non-existent email: ${email}`);
             return res.status(200).json({
-                success: true, // Still send success=true
+                success: true, 
                 message: 'If an account with that email exists, a password reset token has been generated. (Check console for token).',
             });
         }
-
-        // Generate the reset token using the method on the User model
         const resetToken = user.createPasswordResetToken();
-        await user.save({ validateBeforeSave: false }); // Save the user with the new reset token and expiry. Skip validation for this save.
-
-        // In a real app, you would send an email here:
-        // const resetUrl = `${req.protocol}://${req.get('host')}/reset-password/${resetToken}`; // Or your frontend URL
-        // try {
-        //   await sendEmail({ email: user.email, subject: 'Your Password Reset Token (valid for 10 min)', message: `Reset URL: ${resetUrl}` });
-        //   res.status(200).json({ success: true, message: 'Token sent to email!' });
-        // } catch (err) {
-        //   console.error('EMAIL_ERROR:', err);
-        //   user.passwordResetToken = undefined;
-        //   user.passwordResetExpires = undefined;
-        //   await user.save({ validateBeforeSave: false });
-        //   return res.status(500).json({ success: false, message: 'Error sending email. Try again.'});
-        // }
-
-        // For now, we log the token (this is the UNHASHED token)
-        console.log(`FORGOT_PASSWORD_SUCCESS: Password reset token for ${user.email}: ${resetToken}`);
-        console.log(`FORGOT_PASSWORD_INFO: Hashed token stored in DB for ${user.email}: ${user.passwordResetToken}`);
+        await user.save({ validateBeforeSave: false }); 
+        
+        // Log the saved values from the DB immediately after save for verification
+        const savedUser = await User.findById(user._id).select('+passwordResetToken +passwordResetExpires');
+        console.log(`FORGOT_PASSWORD_DB_VERIFY: User: ${savedUser.email}, Stored Hashed Token: ${savedUser.passwordResetToken}, Stored Expires: ${savedUser.passwordResetExpires}`);
+        console.log(`FORGOT_PASSWORD_SUCCESS: Password reset token for ${user.email}: ${resetToken}`); // This is UNHASHED
 
         res.status(200).json({
             success: true,
             message: 'If an account with that email exists, a password reset token has been generated. (Check backend console for token).',
-            // DO NOT SEND THE TOKEN IN THE RESPONSE FOR SECURITY REASONS
         });
-
     } catch (error) {
         console.error('Forgot Password Error:', error);
-        // Ensure tokens are cleared if any unexpected error occurs during the process
-        // This part might need refinement depending on where the error happens
         if (req.body.email) {
             const userToClear = await User.findOne({ email: req.body.email.toLowerCase() });
             if (userToClear) {
@@ -201,22 +176,17 @@ exports.forgotPassword = async (req, res, next) => {
                 await userToClear.save({ validateBeforeSave: false });
             }
         }
-        res.status(500).json({
-            success: false,
-            message: 'Server error during forgot password process.',
-        });
+        res.status(500).json({ success: false, message: 'Server error during forgot password process.'});
     }
 };
 
-
 // --- Reset Password ---
-// @desc    Reset password using a token
-// @route   PUT /api/v1/auth/resetpassword/:resettoken
-// @access  Public
 exports.resetPassword = async (req, res, next) => {
     try {
         const unhashedTokenFromParams = req.params.resettoken;
         const { password, confirmPassword } = req.body;
+
+        console.log(`RESET_PASSWORD_INFO: Received unhashed token from params: ${unhashedTokenFromParams}`);
 
         if (!password || !confirmPassword) {
             return res.status(400).json({ success: false, message: 'Please provide new password and confirm password.' });
@@ -228,41 +198,51 @@ exports.resetPassword = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'Password must be at least 8 characters long.' });
         }
 
-        // 1. Hash the token received in the URL params to match the one stored in DB
-        const hashedToken = crypto
+        const hashedTokenToSearch = crypto
             .createHash('sha256')
             .update(unhashedTokenFromParams)
             .digest('hex');
+        
+        console.log(`RESET_PASSWORD_INFO: Hashed token being searched in DB: ${hashedTokenToSearch}`);
+        console.log(`RESET_PASSWORD_INFO: Current time for expiry check: ${new Date(Date.now())}`);
 
-        // 2. Find user by the hashed token and check if token is not expired
         const user = await User.findOne({
-            passwordResetToken: hashedToken,
-            passwordResetExpires: { $gt: Date.now() }, // Check if expiry date is greater than now
-        });
+            passwordResetToken: hashedTokenToSearch,
+            passwordResetExpires: { $gt: Date.now() },
+        }).select('+passwordResetToken +passwordResetExpires'); // Select fields for logging
 
         if (!user) {
-            return res.status(400).json({ // 400 Bad Request or 401 Unauthorized
+            console.log(`RESET_PASSWORD_FAIL: User not found with token or token expired.`);
+            // For more detailed debugging, check if user exists by token but is expired
+            const userWithExpiredToken = await User.findOne({ passwordResetToken: hashedTokenToSearch });
+            if (userWithExpiredToken) {
+                console.log(`RESET_PASSWORD_FAIL_DETAIL: User found with token, but token expired. ExpiresAt: ${userWithExpiredToken.passwordResetExpires}, Now: ${new Date(Date.now())}`);
+            } else {
+                console.log(`RESET_PASSWORD_FAIL_DETAIL: No user found with hashed token: ${hashedTokenToSearch}`);
+            }
+            return res.status(400).json({
                 success: false,
                 message: 'Password reset token is invalid or has expired.',
             });
         }
+        
+        console.log(`RESET_PASSWORD_SUCCESS: User found: ${user.email}, Token Expiry: ${user.passwordResetExpires}`);
 
-        // 3. If token is valid, set the new password
-        user.password = password; // The pre-save hook in UserModel will hash it
-        user.passwordResetToken = undefined; // Clear the token
-        user.passwordResetExpires = undefined; // Clear the expiry
-        await user.save(); // This also triggers the pre-save hook to clear tokens
+        user.password = password;
+        user.passwordResetToken = undefined;
+        user.passwordResetExpires = undefined;
+        await user.save();
 
-        // 4. Log the user in (optional, but good UX) by generating a new JWT
         const token = generateToken(user._id, user.role);
         const userResponse = { ...user._doc };
         delete userResponse.password;
-
+        delete userResponse.passwordResetToken; // Ensure these are not in the response
+        delete userResponse.passwordResetExpires;
 
         res.status(200).json({
             success: true,
             message: 'Password reset successful. You are now logged in.',
-            token, // Send new token for auto-login
+            token,
             user: userResponse
         });
 
@@ -272,9 +252,6 @@ exports.resetPassword = async (req, res, next) => {
             const messages = Object.values(error.errors).map(val => val.message);
             return res.status(400).json({ success: false, message: messages.join('. ') });
         }
-        res.status(500).json({
-            success: false,
-            message: 'Server error during password reset.',
-        });
+        res.status(500).json({ success: false, message: 'Server error during password reset.' });
     }
 };
