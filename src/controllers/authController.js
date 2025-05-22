@@ -118,14 +118,12 @@ exports.loginUser = async (req, res, next) => {
 // --- Get Current Logged-In User Controller ---
 exports.getMe = async (req, res, next) => {
     try {
-        // req.user is populated by the authMiddleware after verifying the token
         if (!req.user || !req.user.id) {
              return res.status(401).json({ success: false, message: 'Not authorized, user data not found in request.' });
         }
-        // User object from req.user is already selected without password by protect middleware
         res.status(200).json({
             success: true,
-            user: req.user, // Send the user object attached by the protect middleware
+            user: req.user,
         });
     } catch (error) {
         console.error('GetMe Error:', error);
@@ -137,17 +135,13 @@ exports.getMe = async (req, res, next) => {
 };
 
 // --- Update User Details (e.g., name) ---
-// @access  Private
 exports.updateUserDetails = async (req, res, next) => {
     try {
-        const userId = req.user.id; // From protect middleware
-        const { name /*, other fields like email if you allow changing them */ } = req.body;
+        const userId = req.user.id;
+        const { name } = req.body;
 
-        // Fields to update
         const fieldsToUpdate = {};
         if (name) fieldsToUpdate.name = name;
-        // Add other fields here if needed, e.g.:
-        // if (req.body.email) fieldsToUpdate.email = req.body.email; // Be cautious with email updates due to uniqueness
 
         if (Object.keys(fieldsToUpdate).length === 0) {
             return res.status(400).json({
@@ -156,17 +150,13 @@ exports.updateUserDetails = async (req, res, next) => {
             });
         }
 
-        // Find user and update
-        // { new: true } returns the updated document
-        // { runValidators: true } ensures schema validations are run on update
         const updatedUser = await User.findByIdAndUpdate(
             userId,
             fieldsToUpdate,
             { new: true, runValidators: true }
-        ).select('-password'); // Exclude password from the returned user object
+        ).select('-password');
 
         if (!updatedUser) {
-            // This case should be rare if protect middleware worked correctly
             return res.status(404).json({
                 success: false,
                 message: 'User not found.',
@@ -188,8 +178,7 @@ exports.updateUserDetails = async (req, res, next) => {
                 message: messages.join('. ') || 'Invalid input data for update.',
             });
         }
-        // Handle other potential errors, e.g., if email update causes unique constraint violation
-        if (error.code === 11000 && error.keyValue && error.keyValue.email) { // MongoDB duplicate key error for email
+        if (error.code === 11000 && error.keyValue && error.keyValue.email) {
             return res.status(400).json({
                 success: false,
                 message: 'Email address is already in use by another account.',
@@ -198,6 +187,84 @@ exports.updateUserDetails = async (req, res, next) => {
         res.status(500).json({
             success: false,
             message: 'Server error while updating user details. Please try again later.',
+        });
+    }
+};
+
+// --- Update User Password ---
+// @access  Private
+exports.updateUserPassword = async (req, res, next) => {
+    try {
+        const userId = req.user.id; // From protect middleware
+        const { currentPassword, newPassword, confirmNewPassword } = req.body;
+
+        // 1. Validate input
+        if (!currentPassword || !newPassword || !confirmNewPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide current password, new password, and confirm new password.',
+            });
+        }
+
+        if (newPassword !== confirmNewPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password and confirm new password do not match.',
+            });
+        }
+
+        // 2. Fetch user from DB (need to select password as it's not selected by default)
+        const user = await User.findById(userId).select('+password');
+
+        if (!user) {
+            // Should not happen if protect middleware is working
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
+        // 3. Verify current password
+        const isMatch = await user.comparePassword(currentPassword);
+        if (!isMatch) {
+            return res.status(401).json({ // 401 Unauthorized
+                success: false,
+                message: 'Incorrect current password.',
+            });
+        }
+        
+        // 4. Check new password length (already handled by model validation, but good for early feedback)
+        if (newPassword.length < 8) {
+             return res.status(400).json({
+                success: false,
+                message: 'New password must be at least 8 characters long.',
+            });
+        }
+
+
+        // 5. Set the new password
+        // The pre-save hook in UserModel will automatically hash it before saving
+        user.password = newPassword;
+        await user.save(); // This will trigger the pre-save hook for hashing
+
+        // 6. Optionally, generate a new token (good practice as password change is sensitive)
+        // const token = generateToken(user._id, user.role);
+
+        res.status(200).json({
+            success: true,
+            message: 'Password updated successfully.',
+            // token: token, // Send new token if generated
+        });
+
+    } catch (error) {
+        console.error('Update User Password Error:', error);
+        if (error.name === 'ValidationError') { // For new password not meeting schema criteria
+            const messages = Object.values(error.errors).map(val => val.message);
+            return res.status(400).json({
+                success: false,
+                message: messages.join('. ') || 'Invalid new password data.',
+            });
+        }
+        res.status(500).json({
+            success: false,
+            message: 'Server error while updating password. Please try again later.',
         });
     }
 };
