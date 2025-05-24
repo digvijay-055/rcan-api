@@ -5,20 +5,20 @@ const mongoose = require('mongoose');
 const orderItemSchema = new mongoose.Schema({
     product: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Product', // Reference to the Product model
+        ref: 'Product', 
         required: [true, 'Product ID is required for an order item.'],
     },
-    name: { // Denormalized product name at the time of order
+    name: { 
         type: String,
         required: [true, 'Product name is required for an order item.'],
         trim: true,
     },
-    image: { // Denormalized product image (main one) at the time of order
-        type: String, // URL of the image
+    image: { 
+        type: String, 
         trim: true,
         required: false,
     },
-    price: { // Price of one unit of the product at the time of order
+    price: { 
         type: Number,
         required: [true, 'Price is required for an order item.'],
         min: [0, 'Price cannot be negative.']
@@ -28,22 +28,17 @@ const orderItemSchema = new mongoose.Schema({
         required: [true, 'Quantity is required for an order item.'],
         min: [1, 'Quantity cannot be less than 1.'],
     },
-    // No _id for subdocuments if you don't need to query them individually often,
-    // but Mongoose adds it by default which is usually fine.
-    // _id: false // Uncomment if you want to explicitly disable _id for order items
 });
 
 // Main schema for the order
 const orderSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User', // Reference to the User model
+        ref: 'User', 
         required: [true, 'User ID is required for an order.'],
     },
-    items: [orderItemSchema], // An array of ordered items
+    items: [orderItemSchema], 
     shippingAddress: {
-        // Consider making this a more structured object if you have specific fields
-        // For now, a simple string or a more detailed object:
         fullName: { type: String, required: [true, 'Full name for shipping is required.'] },
         addressLine1: { type: String, required: [true, 'Address line 1 is required.'] },
         addressLine2: { type: String, required: false },
@@ -53,33 +48,36 @@ const orderSchema = new mongoose.Schema({
         country: { type: String, required: [true, 'Country is required.'], default: 'India' },
         phoneNumber: { type: String, required: [true, 'Phone number for shipping is required.'] }
     },
-    paymentMethod: { // e.g., 'Stripe', 'PayPal', 'COD' (Cash On Delivery - if you support it)
+    paymentMethod: { 
         type: String,
         required: [true, 'Payment method is required.'],
         trim: true,
     },
-    paymentResult: { // Details from the payment gateway
-        id: { type: String },         // Transaction ID from payment gateway
-        status: { type: String },     // e.g., 'succeeded', 'pending', 'failed'
-        update_time: { type: String },// Time of payment update from gateway
-        email_address: { type: String } // Payer's email from gateway
+    paymentResult: { 
+        id: { type: String },        
+        status: { type: String },    
+        update_time: { type: String },
+        email_address: { type: String } 
     },
-    itemsPrice: { // Subtotal for all items
+    razorpayOrderId: { // For storing Razorpay's order ID
+        type: String,
+    },
+    itemsPrice: { 
         type: Number,
         required: true,
         default: 0.0,
     },
-    taxPrice: { // Calculated tax amount
+    taxPrice: { 
         type: Number,
         required: true,
         default: 0.0,
     },
-    shippingPrice: { // Cost of shipping
+    shippingPrice: { 
         type: Number,
         required: true,
         default: 0.0,
     },
-    totalPrice: { // Grand total (itemsPrice + taxPrice + shippingPrice)
+    totalPrice: { 
         type: Number,
         required: true,
         default: 0.0,
@@ -87,8 +85,8 @@ const orderSchema = new mongoose.Schema({
     orderStatus: {
         type: String,
         required: true,
-        enum: ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Failed'],
-        default: 'Pending',
+        enum: ['Pending Payment', 'Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Failed'], // Added 'Pending Payment'
+        default: 'Pending Payment', // Changed default to 'Pending Payment' if that's the most common initial state
     },
     isPaid: {
         type: Boolean,
@@ -101,25 +99,12 @@ const orderSchema = new mongoose.Schema({
     deliveredAt: {
         type: Date,
     },
-    
-    // Inside orderSchema definition
-    razorpayOrderId: {
-        type: String,
-        // You might not want to make this strictly required initially,
-        // as orders might be created before payment ID is known,
-        // or for other payment methods like COD.
-        // required: true 
-    },
-    // You might also want to store:
-    // - Tracking number for shipping
-    // - Notes from the customer
 }, {
-    timestamps: true, // Automatically adds createdAt and updatedAt fields
+    timestamps: true, 
 });
 
-// Indexing for common query patterns
-orderSchema.index({ user: 1, createdAt: -1 }); // For fetching a user's orders, newest first
-orderSchema.index({ orderStatus: 1, createdAt: -1 }); // For admin to filter orders by status
+orderSchema.index({ user: 1, createdAt: -1 }); 
+orderSchema.index({ orderStatus: 1, createdAt: -1 }); 
 
 const Order = mongoose.model('Order', orderSchema);
 
