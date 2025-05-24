@@ -101,6 +101,15 @@ const orderSchema = new mongoose.Schema({
     deliveredAt: {
         type: Date,
     },
+    
+    // Inside orderSchema definition
+    razorpayOrderId: {
+        type: String,
+        // You might not want to make this strictly required initially,
+        // as orders might be created before payment ID is known,
+        // or for other payment methods like COD.
+        // required: true 
+    },
     // You might also want to store:
     // - Tracking number for shipping
     // - Notes from the customer
